@@ -1,4 +1,4 @@
-// workers/src/site-styles.js
+// workers/src/site-styles.js //
 
 const _baseSiteStyles = `
 :root{
