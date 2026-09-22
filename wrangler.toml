@@ -1,7 +1,7 @@
 # GetSetSold.ca — Cloudflare Worker (public site renderer)
 
 name = "cms"
-main = "cms-beta-1/workers/src/index.js"
+main = "workers/src/index.js"
 compatibility_date = "2026-09-01"
 
 # NOTE: do NOT commit secrets here.
