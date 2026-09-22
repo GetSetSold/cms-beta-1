@@ -30,7 +30,7 @@ npx wrangler secret put SUPABASE_SERVICE_KEY  # CMS service_role key (step 0.3)
 npx wrangler secret put MLS_SUPABASE_URL      # https://nkjxlwuextxzpeohutxz.supabase.co
 npx wrangler secret put MLS_SUPABASE_KEY      # MLS read key
 ```
-Then **Workers → getsetsold-pages → Settings → Domains & Routes** → add route for `getsetsold.ca/*`.
+Then **Workers → cms → Settings → Domains & Routes** → add route for `getsetsold.ca/*`.
 
 ## 4. Smoke test (5 min)
 - [ ] Admin login works; Pages list loads; block library shows ~91 blocks.
