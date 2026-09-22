@@ -391,35 +391,56 @@ async function buildCtx(env, baseUrl, settings, routeParams, pageSlug) {
   };
 }
 
-/** Render a CMS page by slug. Returns a Response (200 or 404). */
-async function renderPage(env, url, slug) {
+/** Find a published CMS page. Slugs stored in the DB may or may not start with '/'. */
+async function findPage(env, path) {
+  const stripped = path === '/' ? 'home' : path.replace(/^\/+/, '');
+  const candidates = [...new Set([path, stripped].filter(Boolean))];
+  for (const slug of candidates) {
+    const rows = await sb(
+      env, 'cms', 'pages',
+      `select=slug,blocks,seo,status&slug=eq.${encodeURIComponent(slug)}&status=eq.published&limit=1`
+    ).catch(() => []);
+    if (rows && rows.length) return rows[0];
+  }
+  return null;
+}
+
+/** Block ids treated as "header present" / "footer present" (both generations). */
+const HEADER_IDS = ['site_header', 'header_nav'];
+const FOOTER_IDS = ['site_footer', 'footer'];
+
+/** Render a CMS page by request path. Returns a Response (200 or 404). */
+async function renderPage(env, url, path) {
   const baseUrl = String(env.SITE_URL || url.origin).replace(/\/$/, '');
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error('missing cms supabase credentials');
-  const key = encodeURIComponent(slug);
-  const [pageRows, settingsRows] = await Promise.all([
-    sb(env, 'cms', 'pages', `select=slug,blocks,seo,status&slug=eq.${key}&status=eq.published&limit=1`).catch(() => []),
+  const [page, settingsRows] = await Promise.all([
+    findPage(env, path),
     sb(env, 'cms', 'site_settings', 'select=*&id=eq.1').catch(() => []),
   ]);
-  const page = pageRows && pageRows[0];
   const settings = (settingsRows && settingsRows[0]) || {};
   if (!page) return notFoundResponse(env, url, settings, baseUrl);
 
-  const ctx = await buildCtx(env, baseUrl, settings, {}, slug);
-  if (slug === 'home') {
+  const storedSlug = page.slug || '';
+  const isHome = storedSlug === '/' || storedSlug === '' || storedSlug === 'home';
+  const canonPath = isHome ? '/' : (storedSlug.startsWith('/') ? storedSlug : `/${storedSlug}`);
+  const ctx = await buildCtx(env, baseUrl, settings, {}, storedSlug);
+  if (isHome) {
     ctx.ld.push({
       '@context': 'https://schema.org', '@type': 'WebSite', name: settings.business_name || 'GetSetSold',
       url: baseUrl, potentialAction: { '@type': 'SearchAction', target: `${baseUrl}/buy?q={query}`, 'query-input': 'required name=query' },
     });
   }
   let blocks = Array.isArray(page.blocks) ? [...page.blocks] : [];
-  const types = new Set(blocks.map((b) => b && b.type));
-  if (!types.has('site_header')) blocks.unshift({ type: 'site_header', props: {} });
-  if (!types.has('site_footer')) blocks.push({ type: 'site_footer', props: {} });
+  const types = new Set(blocks.map((b) => b && (b.type || b.block_type)));
+  // Inject header/footer using blocks_library ids so the registry check passes.
+  if (!HEADER_IDS.some((t) => types.has(t))) blocks.unshift({ block_type: 'header_nav', props: {} });
+  if (!FOOTER_IDS.some((t) => types.has(t))) blocks.push({ block_type: 'footer', props: {} });
   const body = await renderBlocks(blocks, ctx);
 
   const seo = page.seo || {};
-  const title = seo.title || `${slug === 'home' ? (settings.business_name || 'GetSetSold') : slug} | ${settings.business_name || 'GetSetSold'}`;
-  const canonical = `${baseUrl}${slug === 'home' ? '/' : `/${slug}`}`;
+  const brand = settings.business_name || 'GetSetSold';
+  const title = seo.title || (isHome ? brand : `${canonPath.replace(/^\//, '')} | ${brand}`);
+  const canonical = `${baseUrl}${canonPath}`;
   const html = docHtml({
     head: headHtml({
       title, description: seo.description || '', canonical,
@@ -437,7 +458,7 @@ async function renderVirtualPage(env, url, { title, description, blocks, routePa
   const settingsRows = await sb(env, 'cms', 'site_settings', 'select=*&id=eq.1').catch(() => []);
   const settings = (settingsRows && settingsRows[0]) || {};
   const ctx = await buildCtx(env, baseUrl, settings, routeParams, '');
-  const all = [{ type: 'site_header', props: {} }, ...blocks, { type: 'site_footer', props: {} }];
+  const all = [{ block_type: 'header_nav', props: {} }, ...blocks, { block_type: 'footer', props: {} }];
   const body = await renderBlocks(all, ctx);
   const html = docHtml({
     head: headHtml({
@@ -452,12 +473,12 @@ async function renderVirtualPage(env, url, { title, description, blocks, routePa
 
 async function notFoundResponse(env, url, settings, baseUrl) {
   const ctx = await buildCtx(env, baseUrl, settings || {}, {}, '');
+  // NOTE: uses blocks_library ids (header_nav/footer/rich_text) so the
+  // registry check passes; `section` is not registered in the library.
   const body = await renderBlocks([
-    { type: 'site_header', props: {} },
-    { type: 'section', props: { blocks: [
-      { type: 'rich_text', props: { align: 'center', html: '<h1>Page not found</h1><p>The page you’re looking for doesn’t exist or has moved.</p><p><a class="gss-btn gss-btn-accent" href="/">Back to Home</a></p>' } },
-    ] } },
-    { type: 'site_footer', props: {} },
+    { block_type: 'header_nav', props: {} },
+    { block_type: 'rich_text', props: { align: 'center', html: `<div class="gss-container" style="padding:4rem 1.25rem;text-align:center"><h1>Page not found</h1><p>The page you\u2019re looking for doesn\u2019t exist or has moved.</p><p><a class="gss-btn gss-btn-accent" href="/">Back to Home</a></p></div>` } },
+    { block_type: 'footer', props: {} },
   ], ctx);
   const html = docHtml({
     head: headHtml({ title: `Not Found | ${(settings && settings.business_name) || 'GetSetSold'}`, description: '', canonical: `${baseUrl}/404`, ogImage: '', ldJson: [], baseUrl, settings: settings || {} }),
@@ -492,6 +513,7 @@ async function handleLeadPost(request, env) {
   if (!email || !EMAIL_RE.test(email)) return json({ error: 'A valid email address is required.' }, 400);
 
   // 1) find-or-create contact (service key; server-side only)
+  // contacts columns: name (single field), email, phone, type, source, tags
   let contactId = null;
   try {
     const found = await sb(env, 'cms', 'contacts', `select=id&email=eq.${encodeURIComponent(email)}&limit=1`, { service: true });
@@ -502,8 +524,7 @@ async function handleLeadPost(request, env) {
         service: true,
         body: {
           email,
-          first_name: payload.first_name || null,
-          last_name: payload.last_name || null,
+          name: [payload.first_name, payload.last_name].filter(Boolean).join(' ') || null,
           phone: payload.phone || null,
           source: 'website',
         },
@@ -530,14 +551,21 @@ async function handleLeadPost(request, env) {
   }
 
   // 3) activity log (best effort)
+  // activity_log columns: contact_id, actor, action, notes
   try {
     await sb(env, 'cms', 'activity_log', 'select=id', {
       service: true,
-      body: { action: 'lead_created', related_type: 'lead', related_id: leadId, data: { form_type: formType } },
+      body: {
+        action: 'lead_created',
+        actor: 'website',
+        contact_id: contactId,
+        notes: `New ${formType} lead${email ? ` from ${email}` : ''}${payload.address ? ` — ${payload.address}` : ''}`,
+      },
     });
   } catch { /* non-critical */ }
 
   // 4) notifications per notification_rules (best effort)
+  // notifications columns: contact_id, channel, template, payload, status
   try {
     const rules = await sb(env, 'cms', 'notification_rules', 'select=*', { service: true });
     const match = (rules || []).filter((r) =>
@@ -547,12 +575,17 @@ async function handleLeadPost(request, env) {
       await sb(env, 'cms', 'notifications', 'select=id', {
         service: true,
         body: {
-          title: `New ${formType} lead`,
-          body: `${payload.first_name || ''} ${payload.last_name || ''} <${email}>`.trim(),
-          related_type: 'lead',
-          related_id: leadId,
-          rule_id: rule.id || null,
+          contact_id: contactId,
           channel: rule.channel || 'email',
+          template: 'new_lead',
+          payload: {
+            title: `New ${formType} lead`,
+            body: `Name: ${[payload.first_name, payload.last_name].filter(Boolean).join(' ') || '—'} · Email: ${email} · Phone: ${payload.phone || '—'}`,
+            form_type: formType,
+            lead_id: leadId,
+            rule_id: rule.id || null,
+          },
+          status: 'pending',
         },
       }).catch(() => {});
     }
@@ -580,7 +613,11 @@ async function sitemapResponse(env, url) {
   };
   try {
     const pages = await sb(env, 'cms', 'pages', 'select=slug&status=eq.published&limit=500');
-    add(pages, '', (r) => (r.slug && r.slug !== 'home' ? r.slug : null));
+    // Stored slugs may include a leading slash; normalize for URL building.
+    add(pages, '', (r) => {
+      const s = String(r.slug || '').replace(/^\/+/, '');
+      return (s && s !== 'home') ? s : null;
+    });
   } catch { /* ignore */ }
   try {
     const guides = await sb(env, 'cms', 'guides', 'select=slug&limit=500').catch(() => []);
@@ -664,11 +701,11 @@ export default {
           }));
         }
 
-        // CMS pages: / -> home, /:slug -> page
-        const slug = path === '/' ? 'home' : decodeURIComponent(path.slice(1));
-        if (!slug.includes('/')) {
-          return await cachedPage(request, env, ctx, () => renderPage(env, url, slug));
-        }
+        // CMS pages: match the request path against stored slugs
+        // (slugs in the DB may include a leading slash; nested paths are fine).
+        let pagePath;
+        try { pagePath = decodeURIComponent(path); } catch { pagePath = path; }
+        return await cachedPage(request, env, ctx, () => renderPage(env, url, pagePath || '/'));
       }
 
       return new Response('Not found', { status: 404 });

@@ -3,7 +3,7 @@
  *
  * Every block is an async function `(props, ctx) => string` returning an
  * HTML string. `props` comes from the page's `blocks` JSONB array
- * (`{type, props}`); `ctx` is built per-request in src/index.js:
+ * (`{type|block_type, props}`); `ctx` is built per-request in src/index.js:
  *
  *   ctx = {
  *     env, settings, baseUrl, pageSlug,
@@ -29,6 +29,33 @@ const cx = (...parts) => parts.filter(Boolean).join(' ');
 export function safeUrl(u, fallback = '#') {
   const s = String(u ?? '').trim();
   return /^(https?:\/\/|\/|#|mailto:|tel:)/i.test(s) ? s : fallback;
+}
+
+/**
+ * Parse a prop that may already be an array, a JSON string, or a
+ * Python-repr string (single quotes, True/False/None) as stored by the
+ * previous page builder. Always returns an array (possibly empty).
+ */
+function parseList(v) {
+  if (Array.isArray(v)) return v;
+  if (v == null) return [];
+  const s = String(v).trim();
+  if (!s || s === 'None' || s === '[]') return [];
+  try {
+    const j = JSON.parse(s);
+    return Array.isArray(j) ? j : [];
+  } catch { /* fall through to repr parsing */ }
+  try {
+    const jsonish = s
+      .replace(/'/g, '"')
+      .replace(/\bNone\b/g, 'null')
+      .replace(/\bTrue\b/g, 'true')
+      .replace(/\bFalse\b/g, 'false');
+    const j = JSON.parse(jsonish);
+    return Array.isArray(j) ? j : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Section background variants. */
@@ -139,14 +166,19 @@ async function site_footer(props, ctx) {
 
 async function hero(props, ctx) {
   const p = props || {};
+  const bg = p.bg_image || p.image;
+  const kicker = p.kicker || p.eyebrow;
+  const buttons = Array.isArray(p.buttons) && p.buttons.length
+    ? p.buttons
+    : (p.cta_label ? [{ label: p.cta_label, href: p.cta_href || '#', style: 'accent' }] : []);
   return `<section class="gss-hero ${esc(p.size || 'large')}">
-    ${p.bg_image ? `<div class="gss-hero-bg" style="background-image:url('${esc(safeUrl(p.bg_image))}')"></div><div class="gss-hero-overlay"></div>` : ''}
+    ${bg ? `<div class="gss-hero-bg" style="background-image:url('${esc(safeUrl(bg))}')"></div><div class="gss-hero-overlay"></div>` : ''}
     <div class="gss-container gss-hero-inner">
-      ${p.kicker ? `<p class="gss-kicker">${esc(p.kicker)}</p>` : ''}
+      ${kicker ? `<p class="gss-kicker">${esc(kicker)}</p>` : ''}
       <h1>${esc(p.heading || '')}</h1>
       ${p.subheading ? `<p class="gss-hero-sub">${esc(p.subheading)}</p>` : ''}
-      ${Array.isArray(p.buttons) && p.buttons.length ? `<div class="gss-btn-row">${
-        p.buttons.map((b) => `<a class="gss-btn ${b.style === 'outline' ? 'gss-btn-outline-light' : b.style === 'dark' ? 'gss-btn-dark' : 'gss-btn-accent'}" href="${esc(safeUrl(b.href))}">${esc(b.label)}</a>`).join('')
+      ${buttons.length ? `<div class="gss-btn-row">${
+        buttons.map((b) => `<a class="gss-btn ${b.style === 'outline' ? 'gss-btn-outline-light' : b.style === 'dark' ? 'gss-btn-dark' : 'gss-btn-accent'}" href="${esc(safeUrl(b.href))}">${esc(b.label)}</a>`).join('')
       }</div>` : ''}
       ${p.trust_line ? `<p class="gss-hero-trust">${esc(p.trust_line)}</p>` : ''}
     </div>
@@ -207,7 +239,10 @@ async function divider() {
 async function rich_text(props) {
   const p = props || {};
   const align = ['left', 'center', 'right'].includes(p.align) ? ` gss-text-${p.align}` : '';
-  return `<div class="gss-richtext${align}">${p.html || ''}</div>`;
+  // `body_html` is the prop name used by the previous builder.
+  const html = p.html || p.body_html || '';
+  const heading = p.heading ? `<h2>${esc(p.heading)}</h2>` : '';
+  return `<div class="gss-richtext${align}">${heading}${html}</div>`;
 }
 
 /**
@@ -224,11 +259,12 @@ async function image(props, ctx) {
     try {
       const rows = await ctx.sb(
         'image_assignments',
-        `select=image_id,images(url,alt_text)&related_type=eq.${encodeURIComponent(p.assignment.related_type)}&related_id=eq.${encodeURIComponent(p.assignment.related_id)}&limit=1`
+        // images table columns: image_url, alt_text
+        `select=image_id,images(image_url,alt_text)&related_type=eq.${encodeURIComponent(p.assignment.related_type)}&related_id=eq.${encodeURIComponent(p.assignment.related_id)}&limit=1`
       );
       const img = rows && rows[0] && rows[0].images;
-      if (img && (img.url || img.file_path)) {
-        url = img.url || img.file_path;
+      if (img && img.image_url) {
+        url = img.image_url;
         alt = alt || img.alt_text || '';
       }
     } catch { /* fail soft */ }
@@ -252,7 +288,8 @@ async function gallery(props) {
 
 async function stats(props) {
   const p = props || {};
-  const items = Array.isArray(p.items) ? p.items : [];
+  // `stats` (possibly a serialized string) is the prop name used by the previous builder.
+  const items = Array.isArray(p.items) && p.items.length ? p.items : parseList(p.stats);
   if (!items.length) return '<!-- stats: empty -->';
   return `<div class="gss-stats">${items.map((s) =>
     `<div class="gss-stat"><span class="gss-stat-value">${esc(s.value)}</span><span class="gss-stat-label">${esc(s.label)}</span></div>`
@@ -292,10 +329,14 @@ async function faq(props, ctx) {
 
 async function cta_banner(props) {
   const p = props || {};
+  // Legacy prop names from the previous builder: cta_label / cta_href / phone.
+  const buttonLabel = p.button_label || p.cta_label;
+  const buttonHref = p.button_href || p.cta_href || '/contact';
+  const text = p.text || (p.phone ? `Call ${p.phone}` : '');
   return `<section class="gss-cta-banner ${p.variant === 'dark' ? 'gss-bg-dark' : 'gss-bg-accent'}">
     <div class="gss-container gss-cta-inner">
-      <div><h2>${esc(p.heading || '')}</h2>${p.text ? `<p>${esc(p.text)}</p>` : ''}</div>
-      ${p.button_label ? `<a class="gss-btn ${p.variant === 'dark' ? 'gss-btn-accent' : 'gss-btn-white'}" href="${esc(safeUrl(p.button_href || '/contact'))}">${esc(p.button_label)}</a>` : ''}
+      <div><h2>${esc(p.heading || '')}</h2>${text ? `<p>${esc(text)}</p>` : ''}</div>
+      ${buttonLabel ? `<a class="gss-btn ${p.variant === 'dark' ? 'gss-btn-accent' : 'gss-btn-white'}" href="${esc(safeUrl(buttonHref))}">${esc(buttonLabel)}</a>` : ''}
     </div>
   </section>`;
 }
@@ -303,8 +344,10 @@ async function cta_banner(props) {
 async function agent_bio(props, ctx) {
   const p = props || {};
   const s = ctx.settings || {};
+  // settings column is agent_image_url (agent_photo kept as fallback)
+  const photo = p.photo || s.agent_photo || s.agent_image_url;
   return `<div class="gss-agent-bio gss-card">
-    ${p.photo || s.agent_photo ? `<img class="gss-agent-photo" src="${esc(safeUrl(p.photo || s.agent_photo))}" alt="${esc(p.name || 'Rohit Sharma')}">` : ''}
+    ${photo ? `<img class="gss-agent-photo" src="${esc(safeUrl(photo))}" alt="${esc(p.name || 'Rohit Sharma')}">` : ''}
     <div><h3>${esc(p.name || 'Rohit Sharma')}, REALTOR®</h3>
     ${p.title ? `<p class="gss-agent-title">${esc(p.title)}</p>` : ''}
     ${p.bio ? `<p>${esc(p.bio)}</p>` : ''}
@@ -391,9 +434,11 @@ function listingCard(l) {
 /** listing_grid: reads the MLS `grid` table. Props: limit, city, status, order. */
 async function listing_grid(props, ctx) {
   const p = props || {};
-  const limit = Math.min(parseInt(p.limit, 10) || 9, 50);
+  // Legacy prop names from the previous builder: pageSize / defaultArea.
+  const limit = Math.min(parseInt(p.limit || p.pageSize, 10) || 9, 50);
+  const city = p.city || (p.defaultArea && p.defaultArea !== 'None' ? p.defaultArea : '');
   let qs = `select=*&limit=${limit}`;
-  if (p.city) qs += `&city=eq.${encodeURIComponent(p.city)}`;
+  if (city) qs += `&city=eq.${encodeURIComponent(city)}`;
   if (p.status) qs += `&status=eq.${encodeURIComponent(p.status)}`;
   let rows;
   try {
@@ -402,7 +447,8 @@ async function listing_grid(props, ctx) {
     try { rows = await ctx.mls('grid', `select=*&limit=${limit}`); } catch { rows = []; }
   }
   if (!rows || !rows.length) return '<!-- listing_grid: no results -->';
-  return `<div class="gss-listing-grid">${rows.map(listingCard).join('')}</div>
+  const heading = p.heading ? `<div class="gss-container"><h2 class="gss-center">${esc(p.heading)}</h2></div>` : '';
+  return `${heading}<div class="gss-listing-grid">${rows.map(listingCard).join('')}</div>
     ${p.more_href ? `<p class="gss-center"><a class="gss-btn gss-btn-outline" href="${esc(safeUrl(p.more_href))}">${esc(p.more_label || 'View All Listings')}</a></p>` : ''}`;
 }
 
@@ -581,29 +627,73 @@ async function neighbourhood_block(props, ctx) {
   }).join('')}</div>`;
 }
 
+/** Standard input sets for each client-side calculator engine (see index.js). */
+const CALC_FIELDS = {
+  mortgage_payment: [
+    { name: 'price', label: 'Home price', type: 'number', required: true, placeholder: '750000' },
+    { name: 'down_payment', label: 'Down payment', type: 'number', required: true, placeholder: '150000' },
+    { name: 'rate', label: 'Interest rate (%)', type: 'number', required: true, placeholder: '5.25' },
+    { name: 'years', label: 'Amortization (years)', type: 'number', required: true, placeholder: '25' },
+  ],
+  affordability: [
+    { name: 'income', label: 'Annual household income', type: 'number', required: true, placeholder: '120000' },
+    { name: 'debts', label: 'Monthly debts', type: 'number', placeholder: '500' },
+    { name: 'rate', label: 'Interest rate (%)', type: 'number', required: true, placeholder: '5.25' },
+    { name: 'years', label: 'Amortization (years)', type: 'number', required: true, placeholder: '25' },
+  ],
+  land_transfer: [
+    { name: 'price', label: 'Purchase price', type: 'number', required: true, placeholder: '750000' },
+    { name: 'toronto', label: 'Toronto property (double LTT)?', type: 'select', options: [{ value: '0', label: 'No' }, { value: '1', label: 'Yes' }] },
+    { name: 'first_time', label: 'First-time buyer?', type: 'select', options: [{ value: '0', label: 'No' }, { value: '1', label: 'Yes' }] },
+  ],
+  closing_costs: [
+    { name: 'price', label: 'Purchase price', type: 'number', required: true, placeholder: '750000' },
+  ],
+};
+
+/** Minimal markdown -> HTML for calculator copy (paragraphs, headings, bold, links). */
+function mdParagraphs(md) {
+  return String(md).split(/\n{2,}/).map((chunk) => {
+    const t = chunk.trim();
+    if (!t) return '';
+    const hm = t.match(/^(#{1,3})\s+(.*)$/);
+    const inline = (s) => esc(s)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+      .replace(/\n/g, '<br>');
+    if (hm) {
+      const lvl = Math.min(hm[1].length + 1, 4);
+      return `<h${lvl}>${inline(hm[2])}</h${lvl}>`;
+    }
+    return `<p>${inline(t)}</p>`;
+  }).join('');
+}
+
 /**
- * calculator_widget: embeds a calculator by key from calculators_config.
- * Client-side engines keyed by config `type`; fields rendered from
- * config `fields` (array of {name,label,type,default,options}).
+ * calculator_widget: renders a calculator from calculators_config by slug.
+ * Uses the row's title / copy_md / formula_type; inputs come from the
+ * built-in field set for that formula_type and the client-side engines
+ * in index.js do the math.
  */
 async function calculator_widget(props, ctx) {
   const p = props || {};
-  if (!p.key) return '<!-- calculator_widget: no key -->';
+  const key = p.key || p.slug;
+  if (!key) return '<!-- calculator_widget: no key -->';
   let cfg = null;
   try {
-    const rows = await ctx.sb('calculators_config', `select=*&key=eq.${encodeURIComponent(p.key)}&limit=1`);
+    const rows = await ctx.sb('calculators_config', `select=slug,title,formula_type,copy_md&slug=eq.${encodeURIComponent(String(key))}&limit=1`);
     cfg = rows && rows[0];
   } catch { /* ignore */ }
-  if (!cfg) return `<!-- calculator_widget: unknown key ${esc(p.key)} -->`;
-  const fields = Array.isArray(cfg.fields) ? cfg.fields : [];
-  const type = esc(cfg.type || 'generic');
-  const cid = `calc-${esc(p.key).replace(/[^a-z0-9-]/gi, '')}`;
-  return `<div class="gss-calc gss-card" id="${cid}" data-calc-type="${type}">
-    <h3>${esc(cfg.name || cfg.title || p.key)}</h3>
-    ${cfg.description ? `<p class="gss-muted">${esc(cfg.description)}</p>` : ''}
-    <div class="gss-form-grid">${fields.map(fieldHtml).join('')}</div>
+  if (!cfg) return `<!-- calculator_widget: unknown calculator ${esc(key)} -->`;
+  const formulaType = cfg.formula_type || 'generic';
+  const fields = CALC_FIELDS[formulaType] || [];
+  const cid = `calc-${String(key).replace(/[^a-z0-9-]/gi, '')}`;
+  return `<div class="gss-calc gss-card" id="${esc(cid)}" data-calc-type="${esc(formulaType)}">
+    <h3>${esc(cfg.title || String(key))}</h3>
+    ${cfg.copy_md ? `<div class="gss-richtext">${mdParagraphs(cfg.copy_md)}</div>` : ''}
+    ${fields.length ? `<div class="gss-form-grid">${fields.map(fieldHtml).join('')}</div>
     <button type="button" class="gss-btn gss-btn-accent" data-calc-run>Calculate</button>
-    <div class="gss-calc-result" role="status" aria-live="polite"></div>
+    <div class="gss-calc-result" role="status" aria-live="polite"></div>` : ''}
   </div>`;
 }
 
@@ -655,7 +745,7 @@ async function contact_form(props) {
   const p = props || {};
   return leadForm({
     formType: 'contact', id: p.id,
-    title: p.title || 'Get in Touch',
+    title: p.title || p.heading || 'Get in Touch',
     subtitle: p.subtitle || 'Questions about buying or selling? Send a message.',
     submitLabel: p.submit_label || 'Send Message',
     fields: [
@@ -701,6 +791,136 @@ async function newsletter_form(props) {
 }
 
 // ---------------------------------------------------------------------------
+// LEGACY BLOCKS (ids from blocks_library / previous builder)
+// These normalize legacy prop shapes and delegate to the canonical
+// renderers above, so existing pages keep working unchanged.
+// ---------------------------------------------------------------------------
+
+/** header_nav -> site_header (nav items may be a serialized string). */
+async function header_nav(props, ctx) {
+  const p = props || {};
+  const navItems = parseList(p.nav_items).map((n) => ({ label: n.label, href: n.href }));
+  const settings = {
+    ...ctx.settings,
+    ...(p.logo_text ? { business_name: p.logo_text } : {}),
+    ...(navItems.length ? { nav_items: navItems } : {}),
+    ...(p.phone ? { phone: p.phone } : {}),
+  };
+  return site_header(p, { ...ctx, settings });
+}
+
+/** footer -> site_footer. */
+async function footer(props, ctx) {
+  return site_footer(props, ctx);
+}
+
+/** hero_search -> hero + stats band. */
+async function hero_search(props, ctx) {
+  const p = props || {};
+  const heroHtml = await hero({
+    ...p,
+    kicker: p.kicker || p.eyebrow,
+    heading: p.heading || p.headline,
+    subheading: p.subheading || p.subcopy,
+  }, ctx);
+  const items = parseList(p.stats);
+  if (!items.length) return heroHtml;
+  const statsHtml = await stats({ items }, ctx);
+  return `${heroHtml}<div class="gss-container" style="margin-top:-2.5rem;position:relative;z-index:2"><div class="gss-card" style="padding:1.5rem 2rem">${statsHtml}</div></div>`;
+}
+
+/** featured_listings -> featured_carousel (count -> limit). */
+async function featured_listings(props, ctx) {
+  const p = props || {};
+  return featured_carousel({ limit: p.count || p.limit || 6 }, ctx);
+}
+
+/** stat_band / stats_row -> stats. */
+async function stat_band(props, ctx) {
+  return stats({ items: parseList(props && props.stats) }, ctx);
+}
+async function stats_row(props, ctx) {
+  return stats({ items: parseList(props && props.stats) }, ctx);
+}
+
+/** process_steps -> steps (copy -> text). */
+async function process_steps(props, ctx) {
+  const p = props || {};
+  const items = parseList(p.steps).map((s) => ({ title: s.title, text: s.text || s.copy }));
+  return steps({ heading: p.heading, items }, ctx);
+}
+
+/** testimonial / testimonial_carousel -> testimonials. */
+async function testimonial(props, ctx) {
+  const p = props || {};
+  if (!p.quote) return '<!-- testimonial: empty -->';
+  return testimonials({
+    items: [{ quote: p.quote, name: p.name, detail: p.detail, rating: p.rating || 5 }],
+  }, ctx);
+}
+async function testimonial_carousel(props, ctx) {
+  const p = props || {};
+  const items = parseList(p.items || p.testimonials).map((t) => ({
+    quote: t.quote, name: t.name, detail: t.detail, rating: t.rating || 5,
+  })).filter((t) => t.quote);
+  return testimonials({ items }, ctx);
+}
+
+/** lead_form -> leadForm with the requested form type. */
+async function lead_form(props) {
+  const p = props || {};
+  const formType = ['valuation', 'vip_buyer', 'contact', 'referral', 'newsletter'].includes(p.formType)
+    ? p.formType : 'contact';
+  return leadForm({
+    formType,
+    title: p.title || p.heading || 'Get in Touch',
+    subtitle: p.subtitle || p.copy || '',
+    submitLabel: p.submitLabel || p.submit_label || p.ctaLabel || 'Submit',
+    note: 'No spam. Your details stay with us.',
+    fields: [
+      { name: 'first_name', label: 'First name', required: true },
+      { name: 'last_name', label: 'Last name', required: true },
+      { name: 'email', label: 'Email', type: 'email', required: true },
+      { name: 'phone', label: 'Phone', type: 'tel', required: true },
+      { name: 'message', label: 'Message', type: 'textarea', placeholder: 'How can we help?' },
+    ],
+  });
+}
+
+/** image_text_split: simple two-column image/text (graceful when empty). */
+async function image_text_split(props) {
+  const p = props || {};
+  const img = p.image || p.image_url;
+  if (!p.heading && !p.text && !p.body && !img) return '<!-- image_text_split: empty -->';
+  return `<div class="gss-container"><div class="gss-grid gss-grid-2" style="align-items:center">
+    <div>${img ? `<img src="${esc(safeUrl(img))}" alt="${esc(p.alt || p.heading || '')}" loading="lazy" style="border-radius:var(--radius-md)">` : ''}</div>
+    <div>${p.heading ? `<h2>${esc(p.heading)}</h2>` : ''}${p.text || p.body ? `<div class="gss-richtext">${p.text || p.body}</div>` : ''}</div>
+  </div></div>`;
+}
+
+/** map_split_search -> listing_grid with heading. */
+async function map_split_search(props, ctx) {
+  const p = props || {};
+  return listing_grid({
+    heading: p.heading || '',
+    limit: 12,
+    city: p.defaultArea && p.defaultArea !== 'None' ? p.defaultArea : undefined,
+  }, ctx);
+}
+
+/** service_tiles -> card grid with optional CTA links. */
+async function service_tiles(props) {
+  const p = props || {};
+  const tiles = parseList(p.tiles);
+  if (!tiles.length) return '<!-- service_tiles: empty -->';
+  return `<div class="gss-container"><div class="gss-features">${tiles.map((t) =>
+    `<div class="gss-feature gss-card"><div><h3>${esc(t.title || '')}</h3>${
+      t.copy ? `<p>${esc(t.copy)}</p>` : ''
+    }${t.cta ? `<p><a class="gss-btn gss-btn-outline gss-btn-sm" href="${esc(safeUrl(t.link))}">${esc(t.cta)}</a></p>` : ''
+    }</div></div>`).join('')}</div></div>`;
+}
+
+// ---------------------------------------------------------------------------
 // REGISTRY
 // ---------------------------------------------------------------------------
 
@@ -715,20 +935,25 @@ export const BLOCKS = {
   neighbourhood_block, calculator_widget,
   // lead capture
   valuation_form, vip_signup, contact_form, referral_form, newsletter_form,
+  // legacy ids from blocks_library / previous builder (delegating renderers)
+  header_nav, footer, hero_search, featured_listings, stat_band, stats_row,
+  process_steps, testimonial, testimonial_carousel, lead_form,
+  image_text_split, map_split_search, service_tiles,
 };
 
 /**
- * Render a page's blocks array. Unknown / unregistered types are skipped
- * (validated against blocks_library when ctx.lib is available).
+ * Render a page's blocks array. Accepts both `{type, props}` and the legacy
+ * `{block_type, props}` shape. A block renders whenever the worker has a
+ * renderer for it — blocks_library is the admin's picker registry, not a
+ * render gate (several native layout blocks predate it).
  */
 export async function renderBlocks(blocks, ctx) {
   if (!Array.isArray(blocks)) return '';
   const out = [];
   for (const b of blocks) {
-    const type = b && b.type;
+    const type = b && (b.type || b.block_type);
     const fn = type && BLOCKS[type];
     if (!fn) { out.push(`<!-- unknown block: ${esc(type)} -->`); continue; }
-    if (ctx.lib && ctx.lib.size && !ctx.lib.has(type)) { out.push(`<!-- unregistered block: ${esc(type)} -->`); continue; }
     try {
       out.push(await fn(b.props || {}, ctx));
     } catch (err) {
