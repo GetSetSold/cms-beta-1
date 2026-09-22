@@ -10,8 +10,8 @@ compatibility_date = "2026-09-01"
 #   wrangler secret put MLS_SUPABASE_KEY
 
 [vars]
-# SUPABASE_URL       = "https://atmrjimfcydgjonlxzvr.supabase.co"  # CMS project (set as plain var or secret)
-# MLS_SUPABASE_URL   = "https://nkjxlwuextxzpeohutxz.supabase.co"  # MLS project (set as plain var or secret)
+# SUPABASE_URL       = https://atmrjimfcydgjonlxzvr.supabase.co  # CMS project (set as plain var or secret)
+# MLS_SUPABASE_URL   = https://nkjxlwuextxzpeohutxz.supabase.co  # MLS project (set as plain var or secret)
 
 # Secrets (wrangler secret put):
 #   SUPABASE_ANON_KEY     — anon key for CMS project (public reads)
