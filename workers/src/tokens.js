@@ -63,6 +63,42 @@ export const TOKENS = {
 };
 
 /**
+ * `tokens` — the shape listing-detail.js (and future new-design-system
+ * renderers) import: { font: { body, display }, color: {...} }.
+ * Colors map 1:1 onto the TOKENS palette above (ink/blue brand); the two
+ * font stacks are Fraunces (display) + Manrope (body), loaded via Google
+ * Fonts on pages that use this export. The rest of the public site keeps
+ * using TOKENS (Inter) until the new type system is adopted site-wide.
+ */
+export const tokens = {
+  font: {
+    body: `'Manrope', ${TOKENS.fonts.sans}`,
+    display: `'Fraunces', Georgia, 'Times New Roman', serif`,
+  },
+  color: {
+    ink: TOKENS.colors.ink,         // #1a1a1a
+    blue: TOKENS.colors.accent,     // #2456e6 cobalt
+    line: TOKENS.colors.grey200,    // #e5e8ee
+    surface: TOKENS.colors.grey50,  // #f8f9fb
+    ink45: TOKENS.colors.grey500,   // #6b7280
+    ink70: TOKENS.colors.grey700,   // #374151
+    warning: '#b45309',             // amber — "For Rent" tags
+    success: TOKENS.colors.success, // #15803d
+    blueDim: TOKENS.colors.accentSoft, // #eef3fe
+  },
+};
+
+/**
+ * <link> tags for the Fraunces + Manrope webfonts used by `tokens.font`.
+ * Injected into <head> on listing-detail pages via headHtml's extraHead.
+ */
+export function listingFontLinks() {
+  return `<link rel="preconnect" href="https://fonts.googleapis.com">\n` +
+    `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n` +
+    `<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">`;
+}
+
+/**
  * Emit the :root CSS custom properties block.
  * The Worker inlines this in every page <head>.
  */

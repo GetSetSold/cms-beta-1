@@ -12,7 +12,7 @@
  * leave the Worker (only sent as an Authorization header to Supabase).
  */
 
-import { cssVariables } from './tokens.js';
+import { cssVariables, listingFontLinks } from './tokens.js';
 import { renderBlocks, esc, safeUrl } from './blocks.js';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +127,8 @@ p{margin:0 0 1em}
 .gss-page-hero{padding:3.5rem 0 2.5rem;background:var(--grey-50);border-bottom:1px solid var(--grey-200)}
 .gss-page-hero h1{font-size:2.5rem}
 .gss-lead{font-size:1.15rem;color:var(--grey-700);max-width:720px}
+.gss-section-head h2{margin:.4rem 0 .6rem}
+.gss-section-head .gss-lead{margin-left:auto;margin-right:auto}
 .gss-section{padding:var(--section-y) 0}
 .gss-section-tight{padding:2.5rem 0}
 .gss-bg-light{background:var(--grey-50)}
@@ -339,7 +341,7 @@ function clientScript() {
 // Page rendering
 // ---------------------------------------------------------------------------
 
-function headHtml({ title, description, canonical, ogImage, ldJson, baseUrl, settings }) {
+function headHtml({ title, description, canonical, ogImage, ldJson, baseUrl, settings, extraHead }) {
   const siteName = (settings && settings.business_name) || 'GetSetSold';
   const ld = [
     {
@@ -369,6 +371,7 @@ ${ogImage ? `<meta property="og:image" content="${esc(safeUrl(ogImage))}">` : ''
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232456e6'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='18' font-weight='bold' fill='white' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
 <style>${globalCss()}</style>
+${extraHead || ''}
 <script type="application/ld+json">${JSON.stringify(ld).replace(/</g, '\\u003c')}</script>
 </head>`;
 }
@@ -460,11 +463,15 @@ async function renderVirtualPage(env, url, { title, description, blocks, routePa
   const ctx = await buildCtx(env, baseUrl, settings, routeParams, '');
   const all = [{ block_type: 'header_nav', props: {} }, ...blocks, { block_type: 'footer', props: {} }];
   const body = await renderBlocks(all, ctx);
+  // listing-detail pages use the Fraunces/Manrope design-system tokens —
+  // load those webfonts in <head> so they don't flash unstyled.
+  const needsListingFonts = blocks.some((b) => (b.type || b.block_type) === 'listing_detail');
   const html = docHtml({
     head: headHtml({
       title: `${title} | ${settings.business_name || 'GetSetSold'}`,
       description: description || '', canonical: `${baseUrl}${canonicalPath}`,
       ogImage: '', ldJson: ctx.ld, baseUrl, settings,
+      extraHead: needsListingFonts ? listingFontLinks() : '',
     }),
     body,
   });
@@ -499,7 +506,7 @@ function errorResponse(env, url) {
 // /api/leads
 // ---------------------------------------------------------------------------
 
-const ALLOWED_FORM_TYPES = new Set(['valuation', 'vip_buyer', 'contact', 'referral', 'newsletter']);
+const ALLOWED_FORM_TYPES = new Set(['valuation', 'vip_buyer', 'contact', 'referral', 'newsletter', 'listing_inquiry']);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function handleLeadPost(request, env) {
@@ -524,7 +531,7 @@ async function handleLeadPost(request, env) {
         service: true,
         body: {
           email,
-          name: [payload.first_name, payload.last_name].filter(Boolean).join(' ') || null,
+          name: [payload.first_name, payload.last_name].filter(Boolean).join(' ') || payload.name || null,
           phone: payload.phone || null,
           source: 'website',
         },

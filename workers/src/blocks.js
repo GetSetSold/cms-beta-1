@@ -17,6 +17,8 @@
  * satisfy their data needs fail soft: they return an HTML comment.
  */
 
+import { renderListingDetail } from './listing-detail.js';
+
 export const esc = (v) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -452,7 +454,14 @@ async function listing_grid(props, ctx) {
     ${p.more_href ? `<p class="gss-center"><a class="gss-btn gss-btn-outline" href="${esc(safeUrl(p.more_href))}">${esc(p.more_label || 'View All Listings')}</a></p>` : ''}`;
 }
 
-/** listing_detail: reads one MLS `property` (or `sold`) row by id / MLS number. */
+/**
+ * listing_detail: reads one MLS `property` (or `sold`) row by id / MLS number,
+ * then delegates to the full single-listing renderer in listing-detail.js
+ * (gallery, hero stats, cashback banner, rooms, map, POI, HPI trends,
+ * similar listings, affordability calculator, contact card).
+ * mlsFetch adapts listing-detail.js's `mlsFetch(env, query)` contract
+ * (returns a raw Response) onto this Worker's MLS Supabase credentials.
+ */
 async function listing_detail(props, ctx) {
   const p = props || {};
   const id = p.id || p.mls_number || ctx.routeParams?.id;
@@ -469,39 +478,24 @@ async function listing_detail(props, ctx) {
     if (row) break;
   }
   if (!row) return `<div class="gss-container"><p class="gss-empty">This listing is no longer available. <a href="/buy">Browse current listings</a>.</p></div>`;
-  const price = pick(row, 'list_price', 'price', 'sold_price', 'current_price');
-  const addr = pick(row, 'address', 'street_address', 'full_address');
-  const city = pick(row, 'city', 'municipality');
-  const beds = pick(row, 'beds', 'bedrooms');
-  const baths = pick(row, 'baths', 'bathrooms');
-  const sqft = pick(row, 'sqft', 'sq_ft', 'living_area');
-  const desc = pick(row, 'description', 'remarks', 'public_remarks');
-  const photo = pick(row, 'photo_url', 'image_url', 'primary_photo');
-  const photos = Array.isArray(row.photos) ? row.photos : (photo ? [photo] : []);
-  const sold = row._table === 'sold' || /sold/i.test(String(pick(row, 'status')));
+  const addr = row.UnparsedAddress || row.address || row.street_address || row.full_address;
+  const city = row.City || row.city || row.municipality;
+  const price = row.ListPrice ?? row.list_price ?? row.price ?? row.sold_price ?? row.current_price;
   // RealEstateListing JSON-LD
   ctx.ld.push({
     '@context': 'https://schema.org',
     '@type': 'RealEstateListing',
     name: [addr, city].filter(Boolean).join(', '),
-    ...(price && Number.isFinite(Number(price)) ? { offers: { '@type': 'Offer', price: Number(price), priceCurrency: 'CAD' } } : {}),
+    ...(price != null && Number.isFinite(Number(price)) ? { offers: { '@type': 'Offer', price: Number(price), priceCurrency: 'CAD' } } : {}),
   });
-  return `<div class="gss-listing-detail">
-    ${sold ? '<p class="gss-sold-banner">SOLD</p>' : ''}
-    <h1>${esc(addr)}${city ? `, ${esc(city)}` : ''}</h1>
-    <p class="gss-listing-price-lg">${money(price)}</p>
-    ${photos.length ? `<div class="gss-gallery gss-gallery-3">${photos.slice(0, 9).map((u) =>
-      `<figure><img src="${esc(safeUrl(u))}" alt="${esc(addr)}" loading="lazy"></figure>`).join('')}</div>` : ''}
-    <dl class="gss-spec-grid">
-      ${beds ? `<div><dt>Bedrooms</dt><dd>${esc(beds)}</dd></div>` : ''}
-      ${baths ? `<div><dt>Bathrooms</dt><dd>${esc(baths)}</dd></div>` : ''}
-      ${sqft ? `<div><dt>Living area</dt><dd>${esc(Number(sqft).toLocaleString('en-CA'))} sqft</dd></div>` : ''}
-      ${pick(row, 'property_type', 'type') ? `<div><dt>Type</dt><dd>${esc(pick(row, 'property_type', 'type'))}</dd></div>` : ''}
-    </dl>
-    ${desc ? `<div class="gss-richtext"><p>${esc(desc)}</p></div>` : ''}
-    <div class="gss-listing-cta"><a class="gss-btn gss-btn-accent" href="/contact?listing=${esc(encodeURIComponent(String(pick(row, 'id', 'mls_number'))))}">Ask About This Home</a>
-    <a class="gss-btn gss-btn-outline" href="/home-valuation">What's My Home Worth?</a></div>
-  </div>`;
+  const env = ctx.env || {};
+  const mlsFetch = async (e, q) => {
+    const base = String((e && e.MLS_SUPABASE_URL) || '').replace(/\/$/, '');
+    const k = e && e.MLS_SUPABASE_KEY;
+    if (!base || !k) throw new Error('missing mls supabase credentials');
+    return fetch(`${base}/rest/v1/${q}`, { headers: { apikey: k, Authorization: `Bearer ${k}` } });
+  };
+  return renderListingDetail(p, { listing: row, settings: ctx.settings || {} }, env, mlsFetch);
 }
 
 /** featured_carousel: horizontal scroll of featured MLS listings (props.ids or latest). */
@@ -891,11 +885,37 @@ async function lead_form(props) {
 async function image_text_split(props) {
   const p = props || {};
   const img = p.image || p.image_url;
+  const kicker = p.kicker || p.eyebrow;
+  const buttons = Array.isArray(p.buttons) ? p.buttons.filter((b) => b && (b.label || b.href)) : [];
   if (!p.heading && !p.text && !p.body && !img) return '<!-- image_text_split: empty -->';
-  return `<div class="gss-container"><div class="gss-grid gss-grid-2" style="align-items:center">
-    <div>${img ? `<img src="${esc(safeUrl(img))}" alt="${esc(p.alt || p.heading || '')}" loading="lazy" style="border-radius:var(--radius-md)">` : ''}</div>
-    <div>${p.heading ? `<h2>${esc(p.heading)}</h2>` : ''}${p.text || p.body ? `<div class="gss-richtext">${p.text || p.body}</div>` : ''}</div>
+  const imgHtml = img ? `<img src="${esc(safeUrl(img))}" alt="${esc(p.alt || p.heading || '')}" loading="lazy" style="border-radius:var(--radius-md)">` : '';
+  const textHtml = `<div>${kicker ? `<p class="gss-kicker">${esc(kicker)}</p>` : ''}${p.heading ? `<h2>${esc(p.heading)}</h2>` : ''}${p.text || p.body ? `<div class="gss-richtext">${p.text || p.body}</div>` : ''}${buttons.length ? `<div class="gss-btn-row" style="margin-top:16px">${buttons.map((b) => `<a class="gss-btn ${b.style === 'outline' ? 'gss-btn-outline' : 'gss-btn-accent'}" href="${esc(safeUrl(b.href || '#'))}">${esc(b.label || 'Learn more')}</a>`).join('')}</div>` : ''}</div>`;
+  const cols = p.flip ? `${textHtml}<div>${imgHtml}</div>` : `<div>${imgHtml}</div>${textHtml}`;
+  return `<div class="gss-container"><div class="gss-grid gss-grid-2" style="align-items:center">${cols}</div></div>`;
+}
+
+/** section_heading: centered kicker + heading + subheading for section intros. */
+async function section_heading(props) {
+  const p = props || {};
+  if (!p.heading && !p.kicker && !p.sub) return '<!-- section_heading: empty -->';
+  const align = ['left', 'center', 'right'].includes(p.align) ? p.align : 'center';
+  return `<div class="gss-container"><div class="gss-section-head" style="text-align:${align};max-width:720px;margin:0 auto 8px">
+    ${p.kicker ? `<p class="gss-kicker">${esc(p.kicker)}</p>` : ''}
+    ${p.heading ? `<h2>${esc(p.heading)}</h2>` : ''}
+    ${p.sub ? `<p class="gss-lead">${esc(p.sub)}</p>` : ''}
   </div></div>`;
+}
+
+/** button_row: one centered row of buttons (single button via label/href, or a buttons array). */
+async function button_row(props) {
+  const p = props || {};
+  const buttons = Array.isArray(p.buttons) && p.buttons.length
+    ? p.buttons
+    : (p.label ? [{ label: p.label, href: p.href || '#', style: p.style }] : []);
+  if (!buttons.length) return '<!-- button_row: empty -->';
+  const align = ['left', 'center', 'right'].includes(p.align) ? p.align : 'center';
+  return `<div class="gss-container"><div class="gss-btn-row" style="justify-content:${align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'};margin:8px 0 8px">${buttons.map((b) =>
+    `<a class="gss-btn ${b.style === 'outline' ? 'gss-btn-outline' : b.style === 'dark' ? 'gss-btn-dark' : 'gss-btn-accent'}" href="${esc(safeUrl(b.href || '#'))}">${esc(b.label || 'Click')}</a>`).join('')}</div></div>`;
 }
 
 /** map_split_search -> listing_grid with heading. */
@@ -939,6 +959,8 @@ export const BLOCKS = {
   header_nav, footer, hero_search, featured_listings, stat_band, stats_row,
   process_steps, testimonial, testimonial_carousel, lead_form,
   image_text_split, map_split_search, service_tiles,
+  // structured content blocks (migrated from raw-HTML rich_text, Sept 2026)
+  section_heading, button_row,
 };
 
 /**

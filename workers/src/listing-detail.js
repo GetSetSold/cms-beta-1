@@ -30,6 +30,14 @@
 //     Worker can't pre-fetch it server-side without hardcoding that URL,
 //     which felt like the wrong place to bake in that dependency
 //     permanently. Flag this to me if you'd rather it move server-side.
+//
+// ADAPT (Jazz, Sept 2026 — integration notes, safe to keep on re-pastes):
+//   - Similar-listing cards, share URLs, and the contact form's source_page
+//     use /listing/<id> (this Worker's canonical detail route + sitemap),
+//     not /listings/<key>.
+//   - The contact form carries data-gss-form so the site's existing global
+//     form handler POSTs it as JSON to /api/leads (form_type listing_inquiry);
+//     a plain HTML POST would 400 on the JSON-only endpoint.
 
 import { tokens } from "./tokens.js";
 
@@ -279,14 +287,15 @@ function renderContactCard(listing, settings = {}) {
       </div>` : agentName ? `<div class="ld-contact-agent-name ld-contact-agent-name-noimg">${esc(agentName)}</div>` : ""}
       <div class="ld-contact-price">${esc(price)}</div>
       <div class="ld-contact-office">${esc(listing.OfficeName || "Lombard Group Real Estate Inc., Brokerage")}</div>
-      <form class="ld-contact-form" data-form-type="listing_inquiry" action="/api/leads" method="POST">
+      <form class="ld-contact-form" data-gss-form data-form-type="listing_inquiry" novalidate>
         <input type="hidden" name="listing_key" value="${esc(listing.ListingKey || "")}">
-        <input type="hidden" name="source_page" value="${esc("/listings/" + (listing.ListingKey || ""))}">
+        <input type="hidden" name="source_page" value="${esc("/listing/" + (listing.ListingKey || listing.id || ""))}">
         <input name="name" placeholder="Name" required>
         <input name="email" type="email" placeholder="Email" required>
         <input name="phone" placeholder="Phone" required>
         <textarea name="message" placeholder="I'm interested in this property...">I'm interested in ${esc(listing.UnparsedAddress || "this property")}.</textarea>
         <button type="submit" class="ld-btn-primary">Request Info</button>
+        <div class="gss-form-msg ld-form-msg" aria-live="polite"></div>
       </form>
       <a class="ld-btn-secondary" href="tel:+1${esc(String(phoneDisplay).replace(/\D/g, ""))}">Call ${esc(phoneDisplay)}</a>
     </div>`;
@@ -298,7 +307,7 @@ function renderContactCard(listing, settings = {}) {
 // share (native share sheet with a clipboard-copy fallback).
 function renderCashbackBanner(listing) {
   const sale = isSale(listing);
-  const shareUrl = `/listings/${encodeURIComponent(listing.ListingKey || "")}`;
+  const shareUrl = `/listing/${encodeURIComponent(listing.id || listing.mls_number || listing.listing_id || listing.ListingKey || "")}`;
   if (sale) {
     const price = Number(listing.ListPrice) || 0;
     const cashback = Math.min(price * 0.0025, 5000);
@@ -402,8 +411,9 @@ function renderSimilarCard(row, hidden = false) {
   // grid.PhotosCount — confirmed from listings-similar-grid.js (same field
   // used there for its "N Photos" badge).
   const photoCount = row.PhotosCount || 0;
+  const detailId = row.id || row.mls_number || row.listing_id || row.ListingKey || "";
   return `
-    <a class="ld-similar-card${hidden ? " ld-hidden" : ""}" href="/listings/${esc(row.ListingKey || "")}">
+    <a class="ld-similar-card${hidden ? " ld-hidden" : ""}" href="/listing/${esc(detailId)}">
       <div class="ld-similar-thumb" style="background-image:url('${esc(photos[0] || "")}')">
         <span class="ld-similar-status ${sale ? "sale" : "rent"}">${sale ? "For Sale" : "For Rent"}</span>
         ${photoCount > 0 ? `<span class="ld-similar-photocount">${photoCount} Photos</span>` : ""}
@@ -451,7 +461,7 @@ export async function renderListingDetail(props, data, env, mlsFetch) {
             <div class="ld-mls">MLS® <strong>${esc(listing.ListingKey || listing.ListingId || "")}</strong>${listing.OfficeName ? " | " + esc(listing.OfficeName) : ""}</div>
             <div class="ld-hero-actions">
               <a href="tel:+14166057488" class="ld-hero-btn ld-hero-btn-contact">Contact</a>
-              <a href="#ld-mortgage-calc" class="ld-hero-btn ld-hero-btn-afford">Affordability Calculator</a>
+              ${sale ? `<a href="#ld-mortgage-calc" class="ld-hero-btn ld-hero-btn-afford">Affordability Calculator</a>` : ""}
             </div>
           </div>
         </div>
@@ -676,6 +686,9 @@ export async function renderListingDetail(props, data, env, mlsFetch) {
     .ld-btn-primary:hover { background:${tokens.color.ink}; }
     .ld-btn-secondary { display:block; text-align:center; margin-top:10px; padding:11px; border:1px solid ${tokens.color.ink}; border-radius:999px; text-decoration:none; color:${tokens.color.ink}; font-size:13px; font-weight:700; }
     .ld-btn-secondary:hover { background:${tokens.color.ink}; color:#fff; }
+    .ld-form-msg { margin-top:8px; font-size:13px; min-height:1.2em; }
+    .ld-form-msg.ok { color:${tokens.color.success}; }
+    .ld-form-msg.err { color:#c0362c; }
 
     .ld-calc { display:flex; flex-direction:column; gap:10px; }
     .ld-calc label { font-size:12px; color:${tokens.color.ink70}; display:flex; flex-direction:column; gap:4px; }
