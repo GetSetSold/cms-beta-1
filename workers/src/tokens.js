@@ -1,5 +1,5 @@
 /**
- * Shared design tokenss for the GetSetSold.ca public site.
+ * Shared design tokens for the GetSetSold.ca public site.
  *
  * These mirror the CSS custom properties in admin/styles.css so the
  * public site and the admin UI stay visually consistent.
