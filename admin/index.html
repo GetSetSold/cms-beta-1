@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GetSetSold Admin</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Login screen (shown when no session) -->
+  <div id="login-screen" class="login-screen" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <span class="login-logo">GSS</span>
+        <div>
+          <h1>GetSetSold</h1>
+          <p>Admin Console</p>
+        </div>
+      </div>
+      <form id="login-form" autocomplete="on">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" name="email" required autocomplete="username" placeholder="you@getsetsold.ca" />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" name="password" required autocomplete="current-password" placeholder="••••••••" />
+        </label>
+        <p id="login-error" class="form-error" hidden></p>
+        <p id="login-config-warning" class="config-warning" hidden></p>
+        <button type="submit" class="btn btn-primary btn-block" id="login-submit">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- App shell (shown when signed in) -->
+  <div id="app-shell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="login-logo">GSS</span>
+        <span class="sidebar-brand-text">GetSetSold</span>
+      </div>
+      <nav class="sidebar-nav" id="main-nav">
+        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+        <a href="#/pages" data-route="pages">Pages</a>
+        <a href="#/leads" data-route="leads">Leads</a>
+        <a href="#/contacts" data-route="contacts">Contacts</a>
+        <a href="#/buyers" data-route="buyers">Buyers</a>
+        <a href="#/sellers" data-route="sellers">Sellers</a>
+        <a href="#/media" data-route="media">Media</a>
+        <a href="#/forms" data-route="forms">Forms</a>
+        <a href="#/settings" data-route="settings">Settings</a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="logout-btn" class="btn btn-ghost btn-block">Log out</button>
+      </div>
+    </aside>
+    <main class="main">
+      <div id="toast-root"></div>
+      <div id="app"></div>
+    </main>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

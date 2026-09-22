@@ -1,0 +1,19 @@
+# GetSetSold.ca — Cloudflare Worker (public site renderer)
+
+name = "getsetsold-pages"
+main = "workers/src/index.js"
+compatibility_date = "2026-09-01"
+
+# NOTE: do NOT commit secrets here.
+# Public/non-secret vars can go under [vars]. Secrets are set via:
+#   wrangler secret put SUPABASE_SERVICE_KEY
+#   wrangler secret put MLS_SUPABASE_KEY
+
+[vars]
+# SUPABASE_URL       = "https://atmrjimfcydgjonlxzvr.supabase.co"  # CMS project (set as plain var or secret)
+# MLS_SUPABASE_URL   = "https://nkjxlwuextxzpeohutxz.supabase.co"  # MLS project (set as plain var or secret)
+
+# Secrets (wrangler secret put):
+#   SUPABASE_ANON_KEY     — anon key for CMS project (public reads)
+#   SUPABASE_SERVICE_KEY  — service_role key for CMS project (server-side lead inserts)
+#   MLS_SUPABASE_KEY      — key for MLS project (read-only: grid/property/sold)
