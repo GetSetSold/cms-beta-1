@@ -1,5 +1,5 @@
 /**
- * GetSetSold.ca public site — Cloudflare Worker.
+ * GetSetSold public site — Cloudflare Worker.
  *
  * Serves the marketing/lead-gen website:
  *  - renders CMS pages (Supabase `pages` table, blocks JSONB) to HTML
